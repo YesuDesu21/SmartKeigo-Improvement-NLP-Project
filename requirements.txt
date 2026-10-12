@@ -5,3 +5,4 @@ cohere
 pinecone
 streamlit
 python-dotenv
+datasets
