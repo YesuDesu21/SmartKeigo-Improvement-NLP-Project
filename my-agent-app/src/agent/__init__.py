@@ -1,8 +1,5 @@
-"""New LangGraph Agent.
+"""SmartKeigo / Keigo Flow LangGraph agent."""
+from .graph import build_graph, graph
 
-This module defines a custom graph.
-"""
-
-from .graph import keigo_app
-
-__all__ = ["keigo_app"]
+keigo_app = graph  # backwards-compatible alias for the old app.py import
+__all__ = ["build_graph", "graph", "keigo_app"]

@@ -1,0 +1,54 @@
+{
+  "seed": 42,
+  "raw_rows": 922,
+  "kept_rows": 909,
+  "dropped": {
+    "unclear_label": 9,
+    "exact_duplicate_after_cleaning": 4
+  },
+  "unique_source_groups": 505,
+  "per_split": {
+    "train": {
+      "rows": 635,
+      "groups": 335,
+      "categories": {
+        "teineigo": 110,
+        "sonkeigo": 93,
+        "kenjogo": 88,
+        "no_change": 176,
+        "optional": 137,
+        "other": 20,
+        "mixed": 11
+      },
+      "sft_core": 456
+    },
+    "test": {
+      "rows": 138,
+      "groups": 88,
+      "categories": {
+        "teineigo": 28,
+        "sonkeigo": 13,
+        "kenjogo": 11,
+        "no_change": 47,
+        "optional": 35,
+        "mixed": 1,
+        "other": 3
+      },
+      "sft_core": 97
+    },
+    "val": {
+      "rows": 136,
+      "groups": 82,
+      "categories": {
+        "teineigo": 23,
+        "sonkeigo": 23,
+        "kenjogo": 18,
+        "no_change": 41,
+        "optional": 26,
+        "mixed": 1,
+        "other": 4
+      },
+      "sft_core": 105
+    }
+  }
+}

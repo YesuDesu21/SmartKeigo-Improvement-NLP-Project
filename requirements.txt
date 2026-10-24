@@ -1,8 +1,13 @@
-langgraph
 langgraph>=1.0.0
+langchain-core
 langchain-groq
+pydantic>=2
 cohere
 pinecone
 streamlit
 python-dotenv
-datasets
+pandas
+sacrebleu
+pytest
+
+# training/ only: torch transformers sentencepiece accelerate bert-score

@@ -1,37 +1,23 @@
-# src/agent/graph.py
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
+
+from .agent import default_llm_factory, default_retriever_factory, make_nodes
 from .state import KeigoState
-from .agent import language_analyzer, keigo_specialist, cultural_coach
 
-# 1. Initialize the Graph
-builder = StateGraph(KeigoState)
 
-# 2. Register Nodes
-builder.add_node("analyzer_node", language_analyzer)
-builder.add_node("specialist_node", keigo_specialist)
-builder.add_node("coach_node", cultural_coach)
+def build_graph(llm_factory=default_llm_factory, retriever_factory=default_retriever_factory):
+    analyzer, retrieve, specialist, reviewer, route = make_nodes(llm_factory, retriever_factory)
+    b = StateGraph(KeigoState)
+    b.add_node("analyzer_node", analyzer)
+    b.add_node("retrieve_node", retrieve)
+    b.add_node("specialist_node", specialist)
+    b.add_node("reviewer_node", reviewer)
+    b.add_edge(START, "analyzer_node")
+    b.add_edge("analyzer_node", "retrieve_node")
+    b.add_edge("retrieve_node", "specialist_node")
+    b.add_edge("specialist_node", "reviewer_node")
+    # Bounded loop: at most cfg.max_revisions revisions after the initial draft.
+    b.add_conditional_edges("reviewer_node", route, {"revise": "specialist_node", "end": END})
+    return b.compile()
 
-# 3. Create Fixed Structural Edges
-builder.add_edge(START, "analyzer_node")
-builder.add_edge("analyzer_node", "specialist_node")
-builder.add_edge("specialist_node", "coach_node")
 
-# 4. Create the Loop Condition (Conditional Edge)
-def route_approval(state: KeigoState):
-    if state["is_approved"] == True:
-        return "approved"
-    else:
-        return "rejected"
-
-# If approved -> End the script. If rejected -> Route back to the Specialist
-builder.add_conditional_edges(
-    "coach_node",
-    route_approval,
-    {
-        "approved": END,
-        "rejected": "specialist_node"
-    }
-)
-
-# 5. Compile everything into an executable app object
-keigo_app = builder.compile()
+graph = build_graph()  # no network/API keys needed until invoke
