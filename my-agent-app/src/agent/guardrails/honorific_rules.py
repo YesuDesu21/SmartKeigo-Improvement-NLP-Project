@@ -38,6 +38,47 @@ NIJUU_KEIGO_PATTERNS = [
     ),
 ]
 
+# Patterns that definitively mark text as still casual/informal.
+# Any match means the candidate has NOT been converted to keigo.
+CASUAL_MARKERS = [
+    (r"じゃダメ(か|？|\?)?",     "じゃダメ – casual negotiation; use ではいけませんか/ではご都合が悪いでしょうか"),
+    (r"(んだよね|んだよ|んだな)(\s|。|$)", "〜んだよね/よ/な – casual explanatory ending; use 〜のです/〜のですが"),
+    (r"(たいんだよ|たいんだ)(\s|。|$)", "〜たいんだよ – casual desiderative; use 〜たく存じます/〜たいと存じます"),
+    (r"(だよ|だぜ|だな|だよな)(\s|。|$)", "〜だよ/ぜ/な – casual copula ending; use です"),
+    (r"(するの|したの|行くの|来るの)\?",  "〜するの？ – casual question; use 〜されますか/〜なさいますか"),
+    # Bare surname (kanji 2-4 chars) at start, addressed without さん/様
+    (r"^[一-龠]{2,4}(、|,|\s+)(?!さん|様|先生)",
+     "Bare surname without honorific suffix (呼び捨て); must add さん or 様"),
+]
+
+
+def audit_nijuu_keigo(text: str) -> Tuple[bool, List[str]]:
+    """Audits text for deterministic Nijuu Keigo (二重敬語) violations.
+    
+    Returns:
+        (has_violations, list_of_violation_descriptions)
+    """
+    violations = []
+    for pattern, desc in NIJUU_KEIGO_PATTERNS:
+        if re.search(pattern, text):
+            violations.append(desc)
+    return len(violations) > 0, violations
+
+
+def audit_casual_markers(text: str) -> Tuple[bool, List[str]]:
+    """Detect clearly casual language that proves the text was NOT converted to keigo.
+
+    Returns:
+        (has_casual, list_of_descriptions)
+    """
+    found = []
+    for pattern, desc in CASUAL_MARKERS:
+        if re.search(pattern, text):
+            found.append(desc)
+    return len(found) > 0, found
+
+
+
 
 def audit_nijuu_keigo(text: str) -> Tuple[bool, List[str]]:
     """Audits text for deterministic Nijuu Keigo (二重敬語) violations.

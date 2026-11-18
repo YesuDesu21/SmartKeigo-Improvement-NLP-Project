@@ -9,7 +9,7 @@ from langchain_core.runnables import RunnableConfig
 
 from . import prompts
 from .config import RunConfig
-from .guardrails.honorific_rules import audit_nijuu_keigo, convert_to_conservative_teineigo
+from .guardrails.honorific_rules import audit_nijuu_keigo, audit_casual_markers, convert_to_conservative_teineigo
 from .knowledge import get_domain_template, get_suppletive_rules
 from .schemas import AnalysisResult, DraftResult, ReviewResult
 from .state import AgentState, KeigoState
@@ -163,8 +163,53 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
         parsed, rec = call_structured(
             _llm(cfg), DraftResult, prompts.SPECIALIST_SYSTEM, user, "specialist_revision" if is_revision else "specialist"
         )
-        text = parsed.keigo_text.strip() if parsed and parsed.keigo_text.strip() else raw
+
+        # --- Safeguard: if LLM parse failed or returned the unchanged casual input,
+        #     apply the deterministic conservative fallback immediately instead of
+        #     passing casual text to the reviewer (which may incorrectly approve it).
+        if parsed is None or not parsed.keigo_text.strip():
+            # LLM failed to produce structured output – fall back deterministically.
+            fallback_text = convert_to_conservative_teineigo(raw)
+            rec["error"] = rec.get("error", "specialist parse failed – used conservative fallback")
+            cur_rev = state.get("iteration_count", state.get("revision_count", 0))
+            return {
+                "drafts": [fallback_text],
+                "current_candidate": fallback_text,
+                "final_output": fallback_text,
+                "status": "needs_review",
+                "explanation": "LLM specialist did not return a valid result. Applied deterministic conservative Teineigo fallback.",
+                "iteration_count": cur_rev,
+                "revision_count": cur_rev,
+                "fallback_triggered": True,
+                "usage": [rec],
+                "execution_trace": [rec],
+                "feedback": [],
+            }
+
+        text = parsed.keigo_text.strip()
         text = unicodedata.normalize("NFKC", text)
+
+        # --- Safeguard: reject output that is identical to the casual input.
+        #     This catches cases where the LLM parsed successfully but returned
+        #     the original text unchanged (silent no-op conversion).
+        raw_norm = unicodedata.normalize("NFKC", raw)
+        if text == raw_norm:
+            # Force the conservative fallback instead of passing unchanged casual text onward.
+            fallback_text = convert_to_conservative_teineigo(raw)
+            cur_rev = state.get("iteration_count", state.get("revision_count", 0))
+            return {
+                "drafts": [fallback_text],
+                "current_candidate": fallback_text,
+                "final_output": fallback_text,
+                "status": "needs_review",
+                "explanation": "Specialist returned the input unchanged. Applied deterministic conservative Teineigo fallback.",
+                "iteration_count": cur_rev,
+                "revision_count": cur_rev,
+                "fallback_triggered": True,
+                "usage": [rec],
+                "execution_trace": [rec],
+                "feedback": [],
+            }
 
         cur_rev = state.get("iteration_count", state.get("revision_count", 0)) + (1 if is_revision else 0)
         return {
@@ -194,7 +239,38 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
                 "final_output": candidate,
             }
 
-        # Stage 1: Deterministic regex guardrail for Nijuu Keigo (二重敬語) - Zero token fast fail
+        # Stage 1a: Deterministic casual-marker guardrail – reject if text is still casual.
+        # This prevents the LLM reviewer from incorrectly approving an unconverted candidate.
+        has_casual, casual_violations = audit_casual_markers(candidate)
+        if has_casual:
+            rejection_desc = f"Candidate still contains casual Japanese: {'; '.join(casual_violations)}"
+            issues = [
+                {
+                    "category": "not_converted",
+                    "description": rejection_desc,
+                    "suggested_fix": "Convert all casual endings and address forms to appropriate keigo.",
+                }
+            ]
+            rec = {
+                "node": "reviewer_casual_guardrail",
+                "calls": 0,
+                "seconds": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "failed": False,
+            }
+            return {
+                "is_approved": False,
+                "status": "needs_review",
+                "rejection_reason": rejection_desc,
+                "critique_history": [f"Casual-marker guardrail rejected: {rejection_desc}"],
+                "feedback": issues,
+                "usage": [rec],
+                "execution_trace": [rec],
+                "final_output": candidate,
+            }
+
+        # Stage 1b: Deterministic regex guardrail for Nijuu Keigo (二重敬語) - Zero token fast fail
         has_violations, violations = audit_nijuu_keigo(candidate)
         if has_violations:
             rejection_desc = f"Detected Nijuu Keigo (二重敬語): {'; '.join(violations)}"
@@ -314,7 +390,10 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
         max_rev = getattr(cfg, "max_revisions", 2)
         if cur_rev >= max_rev or cur_rev >= 3:
             return "fallback"
-        if any(i.get("category") == "reviewer_error" for i in state.get("feedback", [])):
+        feedback = state.get("feedback", [])
+        # Immediately fall back for unrecoverable reviewer failures or
+        # repeated not_converted (casual-marker guardrail) rejections.
+        if any(i.get("category") in ("reviewer_error", "not_converted") for i in feedback):
             return "fallback"
         return "revise"
 

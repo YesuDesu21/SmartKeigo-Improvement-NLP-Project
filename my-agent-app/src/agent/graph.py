@@ -19,7 +19,19 @@ def build_graph(llm_factory=default_llm_factory, retriever_factory=default_retri
 
     # Fan-in synchronization into Keigo Specialist
     b.add_edge(["analyzer_node", "retrieve_node"], "specialist_node")
-    b.add_edge("specialist_node", "reviewer_node")
+
+    # After specialist: if fallback was triggered by a safeguard inside the
+    # specialist node (e.g. parse failure, unchanged output), skip the reviewer.
+    def route_after_specialist(state: AgentState):
+        if state.get("fallback_triggered"):
+            return "end"   # already converted deterministically; skip review loop
+        return "review"
+
+    b.add_conditional_edges(
+        "specialist_node",
+        route_after_specialist,
+        {"end": END, "review": "reviewer_node"},
+    )
 
     # Bounded critique loop: at most cfg.max_revisions revisions, then fallback to conservative Teineigo
     b.add_conditional_edges(

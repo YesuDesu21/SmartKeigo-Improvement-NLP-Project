@@ -8,6 +8,6 @@ streamlit
 python-dotenv
 pandas
 sacrebleu
+bert-score
 pytest
-
-# training/ only: torch transformers sentencepiece accelerate bert-score
+# training/ only: torch transformers sentencepiece accelerate
