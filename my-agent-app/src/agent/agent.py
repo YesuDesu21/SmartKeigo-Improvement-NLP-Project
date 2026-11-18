@@ -1,6 +1,7 @@
 """Node implementations. Dependencies (LLM, retriever) are injected so the graph is unit-testable
 without network access, and so import never requires API keys."""
 import time
+import unicodedata
 from functools import lru_cache
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -8,8 +9,10 @@ from langchain_core.runnables import RunnableConfig
 
 from . import prompts
 from .config import RunConfig
+from .guardrails.honorific_rules import audit_nijuu_keigo, convert_to_conservative_teineigo
+from .knowledge import get_domain_template, get_suppletive_rules
 from .schemas import AnalysisResult, DraftResult, ReviewResult
-from .state import KeigoState
+from .state import AgentState, KeigoState
 
 
 @lru_cache(maxsize=8)
@@ -66,66 +69,255 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
     def _llm(cfg: RunConfig):
         return llm_factory(cfg.model, cfg.temperature)
 
-    def analyzer(state: KeigoState, config: RunnableConfig):
+    def analyzer(state: AgentState, config: RunnableConfig):
         cfg = RunConfig.from_runnable(config)
+        raw = unicodedata.normalize("NFKC", state.get("casual_input") or state.get("raw_input") or "")
+        scenario = state.get("target_domain") or state.get("scenario") or ""
+        suppletive_rules = get_suppletive_rules(raw)
+        domain_guidelines = get_domain_template(scenario) or {}
+
         if not cfg.use_analyzer:
-            return {"context": {}, "model_id": cfg.model}
-        parsed, rec = call_structured(_llm(cfg), AnalysisResult, prompts.ANALYZER_SYSTEM,
-                                      prompts.analyzer_user(state["raw_input"], state.get("scenario", ""), state.get("requested_register")), "analyzer")
+            return {
+                "casual_input": raw,
+                "raw_input": raw,
+                "context": {},
+                "hierarchy_metadata": {},
+                "suppletive_rules": suppletive_rules,
+                "domain_guidelines": domain_guidelines,
+                "model_id": cfg.model,
+            }
+
+        parsed, rec = call_structured(
+            _llm(cfg),
+            AnalysisResult,
+            prompts.ANALYZER_SYSTEM,
+            prompts.analyzer_user(raw, scenario, state.get("requested_register")),
+            "analyzer",
+        )
         ctx = parsed.model_dump() if parsed else {"unknowns": ["analysis_failed"]}
         if state.get("requested_register"):  # controlled track: the given register is authoritative
             ctx["overall_register"] = state["requested_register"]
-        return {"context": ctx, "usage": [rec], "model_id": cfg.model}
 
-    def retrieve(state: KeigoState, config: RunnableConfig):
+        hierarchy = {
+            "addressee": getattr(parsed, "addressee", "unknown") if parsed else "unknown",
+            "tone": getattr(parsed, "tone", "casual") if parsed else "casual",
+            "intent": getattr(parsed, "intent", "") if parsed else "",
+        }
+        return {
+            "casual_input": raw,
+            "raw_input": raw,
+            "context": ctx,
+            "hierarchy_metadata": hierarchy,
+            "suppletive_rules": suppletive_rules,
+            "domain_guidelines": domain_guidelines,
+            "usage": [rec],
+            "execution_trace": [rec],
+            "model_id": cfg.model,
+        }
+
+    def retrieve(state: AgentState, config: RunnableConfig):
         cfg = RunConfig.from_runnable(config)
+        raw = unicodedata.normalize("NFKC", state.get("casual_input") or state.get("raw_input") or "")
         if not cfg.use_retrieval:
-            return {"retrieved_ids": [], "retrieved_examples": []}
+            return {"retrieved_ids": [], "retrieved_examples": [], "retrieved_exemplars": []}
+
         reg = state.get("requested_register") or (state.get("context") or {}).get("overall_register")
         t0 = time.perf_counter()
         rec = {"node": "retrieval", "calls": 1, "seconds": 0.0, "input_tokens": 0, "output_tokens": 0, "failed": False}
         try:
-            ex = retriever_factory().retrieve(state["raw_input"], cfg.top_k, reg)
+            ex = retriever_factory().retrieve(raw, cfg.top_k, reg)
         except Exception as e:
             ex, rec["failed"], rec["error"] = [], True, f"{type(e).__name__}: {e}"[:200]
         rec["seconds"] = time.perf_counter() - t0
-        return {"retrieved_ids": [e["id"] for e in ex], "retrieved_examples": ex, "usage": [rec]}
+        return {
+            "retrieved_ids": [e["id"] for e in ex],
+            "retrieved_examples": ex,
+            "retrieved_exemplars": ex,
+            "usage": [rec],
+            "execution_trace": [rec],
+        }
 
-    def specialist(state: KeigoState, config: RunnableConfig):
+    def specialist(state: AgentState, config: RunnableConfig):
         cfg = RunConfig.from_runnable(config)
+        raw = unicodedata.normalize("NFKC", state.get("casual_input") or state.get("raw_input") or "")
         drafts = state.get("drafts", [])
         feedback = state.get("feedback") or []
         is_revision = bool(drafts) and bool(feedback)
+
+        exemplars = state.get("retrieved_exemplars") or state.get("retrieved_examples") or []
+        suppletive_rules = state.get("suppletive_rules") or get_suppletive_rules(raw)
+        domain_template = state.get("domain_guidelines") or get_domain_template(
+            state.get("target_domain") or state.get("scenario")
+        )
+
         user = prompts.specialist_user(
-            state["raw_input"], state.get("context"), state.get("retrieved_examples"), state.get("requested_register"),
-            prior_draft=drafts[-1] if is_revision else None, feedback=feedback if is_revision else None)
-        parsed, rec = call_structured(_llm(cfg), DraftResult, prompts.SPECIALIST_SYSTEM, user,
-                                      "specialist_revision" if is_revision else "specialist")
-        text = parsed.keigo_text.strip() if parsed and parsed.keigo_text.strip() else state["raw_input"]
-        return {"drafts": [text], "explanation": parsed.explanation if parsed else "",
-                "revision_count": state.get("revision_count", 0) + (1 if is_revision else 0),
-                "usage": [rec], "feedback": []}
+            raw,
+            state.get("context"),
+            exemplars,
+            state.get("requested_register"),
+            prior_draft=drafts[-1] if is_revision else None,
+            feedback=feedback if is_revision else None,
+            suppletive_rules=suppletive_rules,
+            domain_template=domain_template,
+        )
+        parsed, rec = call_structured(
+            _llm(cfg), DraftResult, prompts.SPECIALIST_SYSTEM, user, "specialist_revision" if is_revision else "specialist"
+        )
+        text = parsed.keigo_text.strip() if parsed and parsed.keigo_text.strip() else raw
+        text = unicodedata.normalize("NFKC", text)
 
-    def reviewer(state: KeigoState, config: RunnableConfig):
+        cur_rev = state.get("iteration_count", state.get("revision_count", 0)) + (1 if is_revision else 0)
+        return {
+            "drafts": [text],
+            "current_candidate": text,
+            "final_output": text,
+            "explanation": parsed.explanation if parsed else "",
+            "iteration_count": cur_rev,
+            "revision_count": cur_rev,
+            "usage": [rec],
+            "execution_trace": [rec],
+            "feedback": [],
+        }
+
+    def reviewer(state: AgentState, config: RunnableConfig):
         cfg = RunConfig.from_runnable(config)
-        if not cfg.use_reviewer:
-            return {"is_approved": True, "status": "unreviewed", "feedback": []}
-        parsed, rec = call_structured(_llm(cfg), ReviewResult, prompts.REVIEWER_SYSTEM,
-                                      prompts.reviewer_user(state["raw_input"], state.get("context"), state["drafts"][-1], state.get("requested_register")), "reviewer")
-        if parsed is None:  # do not loop on a broken reviewer
-            return {"is_approved": False, "status": "needs_review", "usage": [rec],
-                    "feedback": [{"category": "reviewer_error", "description": rec.get("error", "")}]}
-        if parsed.approved:
-            return {"is_approved": True, "status": "approved", "feedback": [], "usage": [rec]}
-        issues = [i.model_dump() for i in parsed.issues] or [{"category": "other", "description": "Reviewer rejected without details", "suggested_fix": ""}]
-        return {"is_approved": False, "status": "needs_review", "feedback": issues, "usage": [rec]}
+        raw = unicodedata.normalize("NFKC", state.get("casual_input") or state.get("raw_input") or "")
+        candidate = state.get("current_candidate") or (state.get("drafts") or [raw])[-1]
 
-    def route_after_review(state: KeigoState, config: RunnableConfig):
+        if not cfg.use_reviewer:
+            return {
+                "is_approved": True,
+                "status": "unreviewed",
+                "feedback": [],
+                "critique_history": ["Unreviewed (reviewer disabled)"],
+                "rejection_reason": None,
+                "final_output": candidate,
+            }
+
+        # Stage 1: Deterministic regex guardrail for Nijuu Keigo (二重敬語) - Zero token fast fail
+        has_violations, violations = audit_nijuu_keigo(candidate)
+        if has_violations:
+            rejection_desc = f"Detected Nijuu Keigo (二重敬語): {'; '.join(violations)}"
+            issues = [
+                {
+                    "category": "double_honorific",
+                    "description": rejection_desc,
+                    "suggested_fix": "Use standard canonical non-redundant honorific (e.g. お書きになった, おっしゃいました)",
+                }
+            ]
+            rec = {
+                "node": "reviewer_regex_guardrail",
+                "calls": 0,
+                "seconds": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "failed": False,
+            }
+            return {
+                "is_approved": False,
+                "status": "needs_review",
+                "rejection_reason": rejection_desc,
+                "critique_history": [f"Regex guardrail rejected: {rejection_desc}"],
+                "feedback": issues,
+                "usage": [rec],
+                "execution_trace": [rec],
+                "final_output": candidate,
+            }
+
+        # Stage 2: LLM Evaluation Criteria (Groq Llama 3.3 70B)
+        suppletive_rules = state.get("suppletive_rules") or get_suppletive_rules(raw)
+        parsed, rec = call_structured(
+            _llm(cfg),
+            ReviewResult,
+            prompts.REVIEWER_SYSTEM,
+            prompts.reviewer_user(
+                raw,
+                state.get("context"),
+                candidate,
+                state.get("requested_register"),
+                suppletive_rules=suppletive_rules,
+            ),
+            "reviewer",
+        )
+        if parsed is None:  # do not loop on a broken reviewer
+            issue = [{"category": "reviewer_error", "description": rec.get("error", "")}]
+            return {
+                "is_approved": False,
+                "status": "needs_review",
+                "rejection_reason": rec.get("error", "reviewer error"),
+                "critique_history": [f"Reviewer Error: {rec.get('error', '')}"],
+                "feedback": issue,
+                "usage": [rec],
+                "execution_trace": [rec],
+                "final_output": candidate,
+            }
+
+        if parsed.approved:
+            return {
+                "is_approved": True,
+                "status": "approved",
+                "rejection_reason": None,
+                "critique_history": ["Approved"],
+                "feedback": [],
+                "usage": [rec],
+                "execution_trace": [rec],
+                "final_output": candidate,
+            }
+
+        issues = [i.model_dump() for i in parsed.issues] or [
+            {"category": "other", "description": "Reviewer rejected without details", "suggested_fix": ""}
+        ]
+        rejection_desc = "; ".join(i.get("description", "") for i in issues)
+        return {
+            "is_approved": False,
+            "status": "needs_review",
+            "rejection_reason": rejection_desc,
+            "critique_history": [f"Iteration critique: {rejection_desc}"],
+            "feedback": issues,
+            "usage": [rec],
+            "execution_trace": [rec],
+            "final_output": candidate,
+        }
+
+    def conservative_fallback(state: AgentState, config: RunnableConfig):
+        """Deterministic conservative fallback to polite Teineigo (〜です / 〜ます)
+        Guarantees 100% convergence and zero pipeline failure when max revisions are reached.
+        """
+        raw = unicodedata.normalize("NFKC", state.get("casual_input") or state.get("raw_input") or "")
+        candidate = state.get("current_candidate") or (state.get("drafts") or [raw])[-1]
+        fallback_text = convert_to_conservative_teineigo(candidate or raw)
+        rec = {
+            "node": "conservative_fallback",
+            "calls": 0,
+            "seconds": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": False,
+        }
+        return {
+            "status": "needs_review",
+            "fallback_triggered": True,
+            "is_approved": False,
+            "final_output": fallback_text,
+            "current_candidate": fallback_text,
+            "explanation": "Reached maximum critique iterations. Applied deterministic conservative Teineigo fallback.",
+            "critique_history": ["Conservative fallback applied"],
+            "usage": [rec],
+            "execution_trace": [rec],
+        }
+
+    def route_after_review(state: AgentState, config: RunnableConfig):
         cfg = RunConfig.from_runnable(config)
         if state.get("is_approved"):
             return "end"
+        cur_rev = state.get("iteration_count", state.get("revision_count", 0))
+        max_rev = getattr(cfg, "max_revisions", 2)
+        if cur_rev >= max_rev or cur_rev >= 3:
+            return "fallback"
         if any(i.get("category") == "reviewer_error" for i in state.get("feedback", [])):
-            return "end"
-        return "revise" if state.get("revision_count", 0) < cfg.max_revisions else "end"
+            return "fallback"
+        return "revise"
+
+    return analyzer, retrieve, specialist, reviewer, conservative_fallback, route_after_review
 
     return analyzer, retrieve, specialist, reviewer, route_after_review

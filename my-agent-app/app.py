@@ -29,8 +29,11 @@ if st.button("Refine Communication"):
                 st.error(f"Pipeline failed: {type(e).__name__}. Check API keys / rate limits.")
                 st.stop()
         st.subheader("Refined Keigo")
-        st.code(s["drafts"][-1], language="markdown")
-        if s["status"] == "needs_review":
+        output_text = s.get("final_output") or s["drafts"][-1]
+        st.code(output_text, language="markdown")
+        if s.get("fallback_triggered"):
+            st.info("Conservative Teineigo fallback applied after maximum review iterations.")
+        elif s["status"] == "needs_review":
             st.warning("The reviewer still had concerns after the maximum revisions. Please check this output manually.")
         elif s["status"] == "approved":
             st.success(f"Approved after {s['revision_count']} revision(s).")

@@ -59,3 +59,20 @@ class Retriever:
                 continue
             out.append({"id": m["id"], **md})
         return out[:top_k]
+
+
+def format_few_shot_exemplars(exemplars: List[Dict[str, str]]) -> str:
+    """Structure output exemplars into clean few-shot formatting:
+    Input (Casual): ... -> Output (Formal Keigo): ...
+    """
+    if not exemplars:
+        return ""
+    lines = []
+    for e in exemplars:
+        src = e.get("source_text", "").strip()
+        tgt = e.get("target_text", "").strip()
+        reg = e.get("register", "")
+        reg_tag = f" [{reg}]" if reg else ""
+        lines.append(f"- Input (Casual): {src} -> Output (Formal Keigo){reg_tag}: {tgt}")
+    return "\n".join(lines)
+

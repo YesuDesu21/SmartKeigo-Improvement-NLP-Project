@@ -12,7 +12,7 @@ class RunConfig:
     max_revisions: int = 2          # revisions AFTER the initial draft
     top_k: int = 3
     model: str = "openai/gpt-oss-120b"
-    temperature: float = 0.0        # fixed decoding for reproducibility
+    temperature: float = 0.0
 
     @classmethod
     def from_runnable(cls, config: Optional[Mapping[str, Any]]) -> "RunConfig":

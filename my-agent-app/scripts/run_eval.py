@@ -41,16 +41,48 @@ for cond in a.conditions:
         for r in rows:
             for t in range(a.trials):
                 try:
-                    s = graph.invoke({"raw_input": r["source_text"], "requested_register": r["register"], "drafts": [], "usage": []},
-                                     config={"configurable": CONDITIONS[cond]})
-                    pred, status, rev, usage = s["drafts"][-1], s["status"], s["revision_count"], s["usage"]
+                    s = graph.invoke(
+                        {
+                            "casual_input": r["source_text"],
+                            "raw_input": r["source_text"],
+                            "requested_register": r["register"],
+                            "drafts": [],
+                            "usage": [],
+                            "execution_trace": [],
+                        },
+                        config={"configurable": CONDITIONS[cond]},
+                    )
+                    pred = s.get("final_output") or s["drafts"][-1]
+                    status = s["status"]
+                    rev = s.get("iteration_count", s.get("revision_count", 0))
+                    usage = s.get("usage", [])
+                    fallback = s.get("fallback_triggered", False)
                     errors = [f'{u["node"]}: {u["error"]}' for u in usage if u.get("error")]
+                    critiques = [c for c in s.get("critique_history", []) if "reject" in c.lower() or "error" in c.lower()]
                 except Exception as e:  # keep failures in the denominator
-                    pred, status, rev, usage = "", f"error:{type(e).__name__}", 0, []
+                    pred, status, rev, usage, fallback = "", f"error:{type(e).__name__}", 0, [], False
                     errors = [f"{type(e).__name__}: {e}"[:300]]
-                f.write(json.dumps({"id": r["id"], "condition": cond, "trial": t, "source_text": r["source_text"], "register": r["register"],
-                                    "prediction": pred, "status": status, "revisions": rev,
-                                    "calls": sum(u["calls"] for u in usage), "seconds": sum(u["seconds"] for u in usage),
-                                    "tokens": sum(u["input_tokens"] + u["output_tokens"] for u in usage),
-                                    "errors": errors}, ensure_ascii=False) + "\n")
+                    critiques = []
+                f.write(
+                    json.dumps(
+                        {
+                            "id": r["id"],
+                            "condition": cond,
+                            "trial": t,
+                            "source_text": r["source_text"],
+                            "register": r["register"],
+                            "prediction": pred,
+                            "status": status,
+                            "revisions": rev,
+                            "fallback_triggered": fallback,
+                            "critiques": critiques,
+                            "calls": sum(u["calls"] for u in usage),
+                            "seconds": sum(u.get("seconds", 0.0) for u in usage),
+                            "tokens": sum(u.get("input_tokens", 0) + u.get("output_tokens", 0) for u in usage),
+                            "errors": errors,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
     print("finished", cond)
