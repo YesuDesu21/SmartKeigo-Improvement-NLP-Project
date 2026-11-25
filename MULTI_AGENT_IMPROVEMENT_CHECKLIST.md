@@ -4,7 +4,7 @@
 **Project Title:** Keigo Master: A LangGraph-Orchestrated Multi-Agent Architecture for Japanese Formality Conversion  
 **Target Paper:** Formal NLP Conference Paper (EMNLP / ACL Style)  
 **Track:** Track A (Proposed Multi-Agent System on Live Runtime)  
-**Primary Tech Stack:** LangGraph, Meta Llama 3.3 70B (`llama-3.3-70b-versatile` via Groq LPU), Cohere v3 Embeddings (`embed-multilingual-v3.0`), Vector DB (Pinecone / Supabase)
+**Primary Tech Stack:** LangGraph, gpt-oss-120b (`openai/gpt-oss-120b` via Groq LPU; replaces Meta Llama 3.3 70B, which Groq no longer offers), Cohere v3 Embeddings (`embed-multilingual-v3.0`), Vector DB (Pinecone / Supabase)
 
 ---
 
@@ -194,8 +194,8 @@
     builder.add_edge("keigo_specialist", "reviewer")
     ```
 
-- [x] **2.3 Integrate Meta Llama 3.3 70B via Groq LPU**
-  - Configure `ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.3)` across all active agent nodes.
+- [x] **2.3 Integrate gpt-oss-120b via Groq LPU**
+  - Configure `ChatGroq(model="openai/gpt-oss-120b", temperature=0.0)` across all active agent nodes (set in `src/agent/config.py`). Originally Meta Llama 3.3 70B (`llama-3.3-70b-versatile`), switched after Groq stopped offering it.
   - Enforce system prompts requiring NFKC Unicode output and strict adherence to provided suppletive constraints.
 
 ---
@@ -231,7 +231,7 @@
 
 - [x] **3.2 Implement `ReviewerNode` with Combined Rule + LLM Logic (`src/agents/nodes/reviewer.py`)**
   - Execute deterministic regex audit first. If violations occur, reject immediately with precise feedback without wasting Groq LLM tokens.
-  - If regex passes, invoke Groq Llama 3.3 70B with evaluation criteria:
+  - If regex passes, invoke gpt-oss-120b on Groq with evaluation criteria:
     1. **Honorific Directionality:** Verify speaker actions use Kenjougo (never Sonkeigo) and listener actions use Sonkeigo (never Kenjougo).
     2. **Semantic Equivalence:** Verify propositional facts are neither omitted nor hallucinated.
     3. **Tone Appropriateness:** Verify register matches target workplace domain.

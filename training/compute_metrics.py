@@ -24,40 +24,49 @@ def _maybe_import_bert_score():
         ) from exc
 
 
-def _load_jsonl(file_path: Path) -> Tuple[list, list]:
-    """Read a JSONL file containing ``id`` and ``prediction`` fields.
-
-    Returns two parallel lists: ``references`` and ``hypotheses``. The
-    reference texts are expected to be stored under the key ``target`` in
-    the same file (the gold standard) or can be supplied separately –
-    for simplicity we assume the file already contains the reference in
-    ``target``.
-    """
+def _read_jsonl(file_path: Path) -> list:
     import json
 
-    references: list[str] = []
-    hypotheses: list[str] = []
     with file_path.open(encoding="utf-8") as f:
-        for line in f:
-            data = json.loads(line)
-            # ``target`` holds the gold sentence; ``prediction`` the model output.
-            references.append(data.get("target", ""))
-            hypotheses.append(data.get("prediction", ""))
-    return references, hypotheses
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def load_pairs(pred_file: str, ref_file: str) -> Tuple[list, list]:
+    """Pair each prediction with its gold sentence by ``id``.
+
+    Gold files (the corpus splits) store the reference under ``target_text``;
+    ``target`` is accepted as a fallback. Predictions whose ``id`` is not in
+    the gold file are an error, since that means the wrong split was given.
+    Returns parallel lists ``(hypotheses, references)``.
+    """
+    gold = {}
+    for row in _read_jsonl(Path(ref_file)):
+        ref = row.get("target_text", row.get("target"))
+        if ref is not None:
+            gold[row["id"]] = ref
+    hyps, refs, missing = [], [], []
+    for row in _read_jsonl(Path(pred_file)):
+        if row["id"] not in gold:
+            missing.append(row["id"])
+            continue
+        hyps.append(row.get("prediction") or "")
+        refs.append(gold[row["id"]])
+    if missing:
+        raise ValueError(
+            f"{len(missing)} of {len(missing) + len(hyps)} predictions in {Path(pred_file).name} "
+            f"have no gold sentence in {Path(ref_file).name} (wrong split?)"
+        )
+    if not hyps:
+        raise ValueError(f"{Path(pred_file).name} contains no predictions")
+    return hyps, refs
 
 
 def compute_bleu(pred_file: str, ref_file: str) -> float:
     """Return the character BLEU score (sacreBLEU) for *pred_file*.
 
-    ``pred_file`` and ``ref_file`` are paths to JSONL files with the same
-    ordering of examples.  The function loads the ``prediction`` column
-    from *pred_file* and the ``target`` column from *ref_file* and
-    computes a character‑level BLEU using ``sacrebleu.corpus_bleu``.
+    Predictions are matched to gold sentences in *ref_file* by ``id``.
     """
-    pred_path = Path(pred_file)
-    ref_path = Path(ref_file)
-    _, hyps = _load_jsonl(pred_path)
-    refs, _ = _load_jsonl(ref_path)
+    hyps, refs = load_pairs(pred_file, ref_file)
     # sacrebleu expects a list of reference lists – we have a single
     # reference set, so we nest it.
     bleu = sacrebleu.corpus_bleu(hyps, [refs], force=True, lowercase=False, tokenize="char")
@@ -71,12 +80,26 @@ def compute_bertscore(pred_file: str, ref_file: str, model_type: str = "bert-bas
     informative ``ImportError`` is raised.
     """
     bert_score = _maybe_import_bert_score()
-    pred_path = Path(pred_file)
-    ref_path = Path(ref_file)
-    refs, hyps = _load_jsonl(ref_path)[0], _load_jsonl(pred_path)[1]
+    hyps, refs = load_pairs(pred_file, ref_file)
     P, R, F1 = bert_score.score(hyps, refs, model_type=model_type, batch_size=batch_size, lang="ja", verbose=False)
     # Return average values as simple floats.
     return {"precision": float(P.mean()), "recall": float(R.mean()), "f1": float(F1.mean())}
+
+def sentence_bleu(hyp: str, refs: list) -> float:
+    """Character BLEU for one sentence against one or more references."""
+    return sacrebleu.sentence_bleu(hyp, list(refs), tokenize="char").score
+
+
+def make_bertscorer(model_type: str = "bert-base-multilingual-cased"):
+    """Load the BERTScore model once; reuse it via ``bertscore_one``."""
+    return _maybe_import_bert_score().BERTScorer(model_type=model_type, lang="ja")
+
+
+def bertscore_one(scorer, hyp: str, refs: list) -> Dict[str, float]:
+    """BERTScore of one sentence against one or more references (best-matching reference)."""
+    P, R, F1 = scorer.score([hyp], [list(refs)])
+    return {"precision": float(P[0]), "recall": float(R[0]), "f1": float(F1[0])}
+
 
 if __name__ == "__main__":  # pragma: no cover – helper for manual testing
     import argparse, json

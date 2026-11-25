@@ -31,7 +31,7 @@ Report exact-match / edit-level accuracy and the human scores as primary; treat 
 
 ## Verified vs not verified
 - Verified here: data prep run, graph logic (4 offline tests with a scripted fake LLM), scorer on the copy baseline, syntax of all scripts.
-- NOT run here (no Groq/Cohere/Pinecone/HuggingFace access): live LLM calls, structured-output behaviour of Llama 3.3 on Groq, T5 training, BERTScore.
+- NOT run here (no Groq/Cohere/Pinecone/HuggingFace access): live LLM calls, structured-output behaviour of the Groq model (now `openai/gpt-oss-120b`; Llama 3.3 70B is no longer offered), T5 training, BERTScore.
   First thing to try: `python -m scripts.run_eval --split ../corpus-dataset/splits/val.jsonl --conditions A3 --trials 1 --limit 5`.
 
 ## Known data issues still to fix by hand

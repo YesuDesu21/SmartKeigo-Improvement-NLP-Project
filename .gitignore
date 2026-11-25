@@ -2,3 +2,7 @@
 __pycache__/
 .venv/
 corpus-dataset/raw/
+# Local-only: large model weights, virtualenv, editor settings
+training/checkpoints/
+venv/
+.vscode/

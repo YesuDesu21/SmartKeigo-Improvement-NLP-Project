@@ -3,7 +3,7 @@
 
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
 [![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
-[![Groq LPU](https://img.shields.io/badge/LLM-Meta_Llama_3.3_70B-green.svg)](https://groq.com/)
+[![Groq LPU](https://img.shields.io/badge/LLM-gpt--oss--120b-green.svg)](https://groq.com/)
 [![Tests](https://img.shields.io/badge/Tests-22%20Passed-brightgreen.svg)]()
 [![Target Paper](https://img.shields.io/badge/Target-EMNLP%20%2F%20ACL%20Empirical-purple.svg)]()
 
@@ -32,7 +32,7 @@ flowchart TD
     START([START]) --> Analyzer["[Node 1: Language Analyzer]<br>• Hierarchy & Tone Extraction<br>• Suppletive Verb Matching<br>• Workplace Domain Guidelines"]
     START --> Retriever["[Node 2: Context Retriever]<br>• Cohere v3 Embeddings<br>• Dynamic Top-k Train Exemplars<br>• Pinecone Vector Store"]
 
-    Analyzer --> Specialist["[Node 3: Keigo Specialist]<br>• Synthesizes Context + RAG<br>• Adheres to Suppletive Constraints<br>• Candidate Generation (Llama 3.3 70B)"]
+    Analyzer --> Specialist["[Node 3: Keigo Specialist]<br>• Synthesizes Context + RAG<br>• Adheres to Suppletive Constraints<br>• Candidate Generation (gpt-oss-120b)"]
     Retriever --> Specialist
 
     Specialist --> Reviewer["[Node 4: Reviewer Agent]<br>• Stage 1: Zero-Token Regex Fast-Fail (二重敬語)<br>• Stage 2: LLM Directionality & Appropriateness Critique"]
@@ -53,7 +53,7 @@ flowchart TD
    * Embeds casual query using Cohere `embed-multilingual-v3.0` and retrieves top-$k$ verified few-shot exemplars strictly from `train.jsonl`.
 3. **Keigo Specialist (敬語翻訳担当)**
    * Synthesizes inputs from both parallel branches (Analyzer context + Suppletive rules + Domain guidelines + RAG exemplars).
-   * Generates formal Keigo candidate using Meta Llama 3.3 70B via Groq LPU with NFKC normalization.
+   * Generates formal Keigo candidate using `openai/gpt-oss-120b` via Groq LPU with NFKC normalization.
 4. **Dual-Stage Reviewer (文化・推敲担当)**
    * **Stage 1 (Deterministic Regex Guardrail):** Audits for classic *Nijuu Keigo* (二重敬語) violations (e.g., `*お書きになられた`, `*おっしゃられました`). If detected, **rejects immediately with 0 LLM tokens consumed**.
    * **Stage 2 (LLM Appropriateness Critique):** Evaluates honorific directionality (Sonkeigo for superiors vs. Kenjougo for speaker) and semantic equivalence.
@@ -67,7 +67,7 @@ flowchart TD
 
 | Component | Technology | Role & Research Value |
 | :--- | :--- | :--- |
-| **Core LLM Engine** | **Meta Llama 3.3 70B** (`llama-3.3-70b-versatile` via Groq LPU) | High-throughput, sub-second inference with strong reasoning and Japanese fluency. |
+| **Core LLM Engine** | **gpt-oss-120b** (`openai/gpt-oss-120b` via Groq LPU) | Open-weight model used by all LLM nodes, with fast inference on Groq. Replaces Meta Llama 3.3 70B (`llama-3.3-70b-versatile`), which Groq no longer offers. |
 | **Orchestration** | **LangGraph (v1.2+)** | Stateful directed cyclic graph supporting true parallel fan-out and bounded feedback loops. |
 | **Embeddings** | **Cohere Embed v3** (`embed-multilingual-v3.0`) | Multilingual dense vector representations tailored for complex Japanese kanji syntax. |
 | **Vector Store** | **Pinecone Serverless** (`keigo-train` index) | Zero-leakage train-only vector retrieval ($k=3$) with metadata filtering. |

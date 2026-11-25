@@ -10,4 +10,8 @@ pandas
 sacrebleu
 bert-score
 pytest
-# training/ only: torch transformers sentencepiece accelerate
+# Track B (fine-tuned T5) in the app: needs torch transformers sentencepiece
+torch
+transformers
+sentencepiece
+# training/ only: accelerate
