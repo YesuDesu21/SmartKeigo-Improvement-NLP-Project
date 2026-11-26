@@ -128,7 +128,13 @@ if st.button("Formalize", type="primary"):
             st.code(agent_out, language="markdown")
             if agent_reg:
                 st.caption(f"Register: {agent_reg}")
-            if s.get("fallback_triggered"):
+            llm_errors = [f'{u["node"]}: {u["error"]}' for u in s.get("usage", []) if u.get("error")]
+            if s.get("fallback_triggered") and llm_errors:
+                st.error("The language model call failed, so this is only the rule-based fallback applied to your "
+                         "input, not a real agent result. Try again; if it keeps failing, check Groq rate limits.")
+                with st.expander("Error details"):
+                    st.write(llm_errors)
+            elif s.get("fallback_triggered"):
                 st.info("Conservative Teineigo fallback applied after maximum review iterations.")
             elif s.get("status") == "needs_review":
                 st.warning("The reviewer still had concerns after the maximum revisions. Please check this output manually.")
@@ -186,14 +192,13 @@ st.divider()
 st.header("📊 Evaluation Metrics: Agent AI vs Fine-tuned Model")
 
 # Fix #4: correct prediction path (run_eval.py writes here)
-agent_pred_path = PROJECT_ROOT / "my-agent-app" / "predictions" / "A3.jsonl"
-gold_path       = PROJECT_ROOT / "corpus-dataset" / "splits" / "val.jsonl"   # run_eval.py default split
+agent_pred_path = PROJECT_ROOT / "my-agent-app" / "predictions" / "test" / "A3.jsonl"
+gold_path       = PROJECT_ROOT / "corpus-dataset" / "splits" / "test.jsonl"
 # Track B: predict_t5.py writes here, from the test split by default
 baseline_pred_path = PROJECT_ROOT / "training" / "predictions" / "B2.jsonl"
 baseline_gold_path = PROJECT_ROOT / "corpus-dataset" / "splits" / "test.jsonl"
-st.caption("Predictions are matched to gold sentences by id. Track A is scored on the "
-           f"`{gold_path.name}` split and Track B on `{baseline_gold_path.name}`; scores are only "
-           "directly comparable when both tracks are run on the same split.")
+st.caption("Both tracks are scored on the test split, matched to gold sentences by id. "
+           "T5 has 2 extra test sentences (99 vs 97), so the totals differ very slightly.")
 
 if st.button("Compute BLEU & BERTScore"):
     col1, col2 = st.columns(2)

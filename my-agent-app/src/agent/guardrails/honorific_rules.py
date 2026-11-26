@@ -102,6 +102,13 @@ _NOT_NAMES = {"今日", "明日", "昨日", "今週", "来週", "先週", "今�
               "結局", "最近", "今度", "以前", "確認", "了解", "大丈夫", "皆様"}
 
 
+def is_already_polite(text: str) -> bool:
+    """True if every sentence in *text* already ends in a polite (です/ます-family) form."""
+    sentences = [s for s in re.split(r"(?<=[。！!？?])", text.strip()) if s.strip()]
+    return bool(sentences) and all(
+        re.search(_POLITE_ENDING + r"(ね|よ|よね)?[。！!？?]*$", s.strip()) for s in sentences)
+
+
 def bare_name_at_start(text: str) -> str:
     """Return the name if *text* opens by addressing someone by bare kanji name (田中、…), else "".
     Titles such as 先生 or 社長 and common words such as 明日 are not bare names."""
@@ -125,6 +132,12 @@ def convert_to_conservative_teineigo(text: str) -> str:
     text = re.sub(r"お召し上がりになられ(る|ます|ました|た)", r"召し上がりました", text)
     text = re.sub(r"いらっしゃられ(る|ます|ました|た)", r"いらっしゃいました", text)
     text = re.sub(r"(お|ご)([ぁ-んァ-ヶー一-龠]{1,6})になられ(る|ます|ました|た)", r"\1\2になりました", text)
+
+    # 1b. Drop rough attention-getters at the start (おい、 / ねえ、 / なあ、) - rude toward a superior.
+    text = re.sub(r"^(おい|おーい|ねえ|ねぇ|なあ|なぁ|ほら)[、,!！\s]*", "", text)
+    # Casual recall question 〜だっけ？ ("what was … again?") -> polite 〜でしたでしょうか / 〜でしたか.
+    text = re.sub(r"だっけ(\?|？)", r"でしたでしょうか\1", text)
+    text = re.sub(r"(?<=[ぁ-んァ-ヶー一-龠])っけ(\?|？)", r"でしょうか\1", text)
 
     # 2. Add 'さん' to bare Japanese surname/name at beginning if followed by punctuation/space
     # e.g. 佐藤、 -> 佐藤さん、 | 田中、 -> 田中さん、

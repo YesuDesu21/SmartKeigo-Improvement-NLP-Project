@@ -9,7 +9,8 @@ from langchain_core.runnables import RunnableConfig
 
 from . import prompts
 from .config import RunConfig
-from .guardrails.honorific_rules import audit_nijuu_keigo, audit_casual_markers, convert_to_conservative_teineigo
+from .guardrails.honorific_rules import (audit_nijuu_keigo, audit_casual_markers, convert_to_conservative_teineigo,
+                                         is_already_polite)
 from .knowledge import get_domain_template, get_suppletive_rules
 from .schemas import AnalysisResult, DraftResult, ReviewResult
 from .state import AgentState, KeigoState
@@ -97,6 +98,11 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
         ctx = parsed.model_dump() if parsed else {"unknowns": ["analysis_failed"]}
         if state.get("requested_register"):  # controlled track: the given register is authoritative
             ctx["overall_register"] = state["requested_register"]
+        elif ctx.get("overall_register") in (None, "no_change", "unknown") and not is_already_polite(raw):
+            # Free input (no register given) means the user wants it formalized. If the analyzer
+            # could not tell who is addressed and called it no_change, default to teineigo
+            # instead of returning casual text unchanged.
+            ctx["overall_register"] = "teineigo"
 
         hierarchy = {
             "addressee": getattr(parsed, "addressee", "unknown") if parsed else "unknown",

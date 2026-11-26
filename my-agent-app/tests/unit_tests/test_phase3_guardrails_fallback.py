@@ -125,6 +125,19 @@ def test_conservative_teineigo_keeps_polite_questions_and_titles():
     assert convert_to_conservative_teineigo("田中、資料を準備した").startswith("田中さん、")
 
 
+def test_conservative_teineigo_drops_oi_and_handles_kke_questions():
+    out = convert_to_conservative_teineigo("おい、こんにちは先生。今週の宿題の期限はいつだっけ？")
+    assert out == "こんにちは先生。今週の宿題の期限はいつでしたでしょうか？"
+
+
+def test_is_already_polite():
+    from src.agent.guardrails.honorific_rules import is_already_polite
+    assert not is_already_polite("昨日送ってくれた資料をもう見たから、あとで電話で連絡するね")
+    assert not is_already_polite("資料を見ました。あとで電話するね。")
+    assert is_already_polite("資料を拝見しました。後ほどお電話いたします。")
+    assert is_already_polite("よろしいでしょうか？")
+
+
 def test_casual_marker_guardrail_allows_titles_but_flags_bare_names():
     from src.agent.guardrails.honorific_rules import audit_casual_markers
     assert audit_casual_markers("先生、こんにちは。お伺いしたいのですが、今週の宿題の期限はいつでしょうか。") == (False, [])
