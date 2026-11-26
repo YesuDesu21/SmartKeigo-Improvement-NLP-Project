@@ -125,6 +125,9 @@ def convert_to_conservative_teineigo(text: str) -> str:
     text = text.strip()
     if not text:
         return text
+    # A fragment ending mid-sentence (…すきすぎて、) has no ending to make polite; adding です would break it.
+    if text[-1] in "、,":
+        return text
 
     # 1. Clean common double honorifics if present
     text = re.sub(r"おっしゃられ(る|ます|ました|た)", r"おっしゃいました", text)

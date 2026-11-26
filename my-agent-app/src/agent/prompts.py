@@ -46,7 +46,11 @@ Approve only if ALL hold:
 - sonkeigo candidates use respectful forms for the other person; humble forms (〜いたす, 〜ておる, させていただく) are wrong direction.
 - Addressees referred to by bare surnames without honorific suffixes (呼び捨て, e.g. 佐藤) are unacceptable; they must be addressed with さん or 様.
 - No double honorific, and it reads as natural business Japanese.
-List every concrete problem with a category and a fix. If there is no problem set approved=true and issues=[]."""
+Reject ONLY for a concrete error from the list above: wrong register, wrong honorific direction, casual wording left in,
+a non-canonical suppletive verb, a double honorific, a bare surname, or a meaning change.
+Do NOT reject for style: if the candidate is correct, approve it even when you would have phrased it differently,
+when another valid keigo form exists (e.g. 拝見しました vs 拝見いたしました, ご存知 vs ご存じ), or when it could be "even more polite".
+If there is no concrete error set approved=true and issues=[]. Otherwise list each error with a category and a fix."""
 
 
 def analyzer_user(text: str, scenario: str, requested_register=None) -> str:

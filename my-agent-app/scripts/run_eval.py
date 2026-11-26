@@ -63,7 +63,7 @@ def run_one(r, cond, t):
         usage = s.get("usage", [])
         fallback = s.get("fallback_triggered", False)
         errors = [f'{u["node"]}: {u["error"]}' for u in usage if u.get("error")]
-        critiques = [c for c in s.get("critique_history", []) if "reject" in c.lower() or "error" in c.lower()]
+        critiques = [c for c in s.get("critique_history", []) if any(w in c.lower() for w in ("reject", "error", "critique", "fallback"))]
     except Exception as e:  # keep failures in the denominator
         pred, status, rev, usage, fallback = "", f"error:{type(e).__name__}", 0, [], False
         errors = [f"{type(e).__name__}: {e}"[:300]]

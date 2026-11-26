@@ -38,19 +38,33 @@ def default_retriever_factory():
     return _retriever
 
 
-def call_structured(llm, schema, system: str, user: str, node: str, retries: int = 1) -> Tuple[Optional[Any], Dict[str, Any]]:
-    """Structured call with usage logging. Failures are recorded, never silently dropped."""
+def _is_format_failure(err: str) -> bool:
+    """The model answered but not in the required structure (Groq 'tool_use_failed' / parse errors)."""
+    return "tool_use_failed" in err or "parse_error" in err or "did not call a tool" in err
+
+
+def call_structured(llm, schema, system: str, user: str, node: str, retries: int = 2) -> Tuple[Optional[Any], Dict[str, Any]]:
+    """Structured call with usage logging. Failures are recorded, never silently dropped.
+    If the model ignores the tool call (a format failure), the next attempt switches to Groq's
+    JSON-schema mode, which constrains the output to the schema directly."""
     runner = llm.with_structured_output(schema, include_raw=True)
     rec: Dict[str, Any] = {"node": node, "calls": 0, "seconds": 0.0, "input_tokens": 0, "output_tokens": 0, "failed": False}
     parsed = None
     for _ in range(retries + 1):
+        if _is_format_failure(rec.get("error", "")):
+            try:
+                runner = llm.with_structured_output(schema, method="json_schema", include_raw=True)
+            except TypeError:  # LLM without a json_schema mode (e.g. test fakes): keep the current runner
+                pass
         t0 = time.perf_counter()
         try:
             out = runner.invoke([("system", system), ("human", user)])
-        except Exception as e:  # network / rate limit
+        except Exception as e:  # network / rate limit / format failure
             rec["calls"] += 1
             rec["seconds"] += time.perf_counter() - t0
             rec["error"] = f"{type(e).__name__}: {e}"[:200]
+            if "rate_limit" in rec["error"] or "RateLimit" in rec["error"]:
+                break  # retrying immediately only burns more of the limit
             continue
         rec["calls"] += 1
         rec["seconds"] += time.perf_counter() - t0
@@ -199,7 +213,12 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
         #     This catches cases where the LLM parsed successfully but returned
         #     the original text unchanged (silent no-op conversion).
         raw_norm = unicodedata.normalize("NFKC", raw)
-        if text == raw_norm:
+        target_reg = state.get("requested_register") or (state.get("context") or {}).get("overall_register")
+        # Unchanged output is the correct answer for no_change targets and already-polite input,
+        # so only treat it as a failed conversion when a real register change was needed.
+        unchanged_ok = target_reg in (None, "no_change", "unknown") or (
+            target_reg == "teineigo" and is_already_polite(raw_norm))
+        if text == raw_norm and not unchanged_ok:
             # Force the conservative fallback instead of passing unchanged casual text onward.
             fallback_text = convert_to_conservative_teineigo(raw)
             cur_rev = state.get("iteration_count", state.get("revision_count", 0))
@@ -366,8 +385,20 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
         Guarantees 100% convergence and zero pipeline failure when max revisions are reached.
         """
         raw = unicodedata.normalize("NFKC", state.get("casual_input") or state.get("raw_input") or "")
-        candidate = state.get("current_candidate") or (state.get("drafts") or [raw])[-1]
-        fallback_text = convert_to_conservative_teineigo(candidate or raw)
+        drafts = [d for d in (state.get("drafts") or []) if d and d.strip()]
+        # Prefer the newest LLM draft that passes the deterministic checks: an LLM draft is almost always
+        # better keigo than the rule-based converter, which only adds です/ます endings.
+        target_reg = state.get("requested_register") or (state.get("context") or {}).get("overall_register")
+        keep_as_is = target_reg in ("no_change", None, "unknown")
+        clean = [d for d in drafts if not audit_casual_markers(d)[0] and not audit_nijuu_keigo(d)[0]
+                 and (is_already_polite(d) or (keep_as_is and d == raw))]
+        if clean:
+            fallback_text = clean[-1]
+            how = "Used the latest draft that passed the rule checks"
+        else:
+            candidate = state.get("current_candidate") or (drafts or [raw])[-1]
+            fallback_text = convert_to_conservative_teineigo(candidate or raw)
+            how = "Applied deterministic conservative Teineigo fallback"
         rec = {
             "node": "conservative_fallback",
             "calls": 0,
@@ -382,8 +413,8 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
             "is_approved": False,
             "final_output": fallback_text,
             "current_candidate": fallback_text,
-            "explanation": "Reached maximum critique iterations. Applied deterministic conservative Teineigo fallback.",
-            "critique_history": ["Conservative fallback applied"],
+            "explanation": f"Reached maximum critique iterations. {how}.",
+            "critique_history": [f"Conservative fallback applied ({how.lower()})"],
             "usage": [rec],
             "execution_trace": [rec],
         }
@@ -397,9 +428,9 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
         if cur_rev >= max_rev or cur_rev >= 3:
             return "fallback"
         feedback = state.get("feedback", [])
-        # Immediately fall back for unrecoverable reviewer failures or
-        # repeated not_converted (casual-marker guardrail) rejections.
-        if any(i.get("category") in ("reviewer_error", "not_converted") for i in feedback):
+        # Immediately fall back only when the reviewer itself failed. A casual-marker rejection
+        # (e.g. a bare name 田中、) is easy for the specialist to fix, so it gets a revision like any other issue.
+        if any(i.get("category") == "reviewer_error" for i in feedback):
             return "fallback"
         return "revise"
 

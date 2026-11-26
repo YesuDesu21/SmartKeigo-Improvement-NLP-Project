@@ -144,3 +144,51 @@ def test_casual_marker_guardrail_allows_titles_but_flags_bare_names():
     assert audit_casual_markers("社長、資料をお持ちしました。") == (False, [])
     assert audit_casual_markers("田中、資料はもう準備しましたか。")[0]
     assert not audit_casual_markers("田中さん、資料はもう準備しましたか。")[0]
+
+
+def test_unchanged_polite_input_is_not_a_fallback():
+    # Already-polite input, target no_change: returning it unchanged is correct, not a failure.
+    fake_llm = CountingFakeLLM(draft_text="資料を拝見しました。", approve_on_review=1)
+    g = build_graph(lambda m, t: fake_llm, lambda: DummyRetriever())
+    out = g.invoke({"casual_input": "資料を拝見しました。", "requested_register": "no_change", "drafts": [], "usage": []},
+                   config={"configurable": {"max_revisions": 2}})
+    assert not out.get("fallback_triggered")
+    assert out["final_output"] == "資料を拝見しました。"
+
+
+def test_fallback_keeps_clean_llm_draft():
+    # Reviewer never approves, but the draft passes the rule checks: keep the LLM draft, not the rule-based one.
+    draft = "明日、先生のオフィスに伺います。"
+    fake_llm = CountingFakeLLM(draft_text=draft, approve_on_review=None)
+    g = build_graph(lambda m, t: fake_llm, lambda: DummyRetriever())
+    out = g.invoke({"casual_input": "明日、先生のオフィスに行く", "drafts": [], "usage": []},
+                   config={"configurable": {"max_revisions": 2}})
+    assert out["fallback_triggered"] is True
+    assert out["final_output"] == draft
+    assert "latest draft" in out["explanation"]
+
+
+def test_format_failure_retries_with_json_schema():
+    from src.agent.agent import call_structured
+    calls = []
+
+    class FlakyLLM:
+        def with_structured_output(self, schema, include_raw=True, method="function_calling"):
+            class R:
+                def invoke(self, msgs):
+                    calls.append(method)
+                    if method != "json_schema":
+                        raise RuntimeError("Error code: 400 - tool_use_failed: model did not call a tool")
+                    return {"raw": SimpleNamespace(usage_metadata={}),
+                            "parsed": DraftResult(keigo_text="伺います。", explanation=""), "parsing_error": None}
+            return R()
+
+    parsed, rec = call_structured(FlakyLLM(), DraftResult, "s", "u", "specialist")
+    assert parsed.keigo_text == "伺います。"
+    assert calls == ["function_calling", "json_schema"]
+    assert not rec["failed"] and "error" not in rec
+
+
+def test_conservative_teineigo_leaves_comma_fragment():
+    s = "原因は友達が不定時に猫に餌をやるからで、プリンはお腹がすきすぎて、"
+    assert convert_to_conservative_teineigo(s) == s
