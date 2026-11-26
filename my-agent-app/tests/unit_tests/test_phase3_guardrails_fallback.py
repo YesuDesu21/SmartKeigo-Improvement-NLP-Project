@@ -112,3 +112,22 @@ def test_convert_to_conservative_teineigo_cases():
     assert "ではいけませんか？" in sato_result
     assert "帰りたいのです。" in sato_result
     assert "。 です。" not in sato_result
+
+
+def test_conservative_teineigo_keeps_polite_questions_and_titles():
+    # A polite LLM draft ending in でしょうか must not get an extra です, and 先生 must not become 先生さん.
+    draft = "先生、こんにちは。今週の宿題の期限をお伺いしたいのですが、いつでしょうか？"
+    assert convert_to_conservative_teineigo(draft) == draft
+    for ending in ("よろしいですか？", "お願いできますか？", "いかがでしょう。", "ご確認ください。", "参りましょうか？"):
+        assert convert_to_conservative_teineigo(ending) == ending
+    assert convert_to_conservative_teineigo("社長、資料をお持ちしました").startswith("社長、")
+    assert convert_to_conservative_teineigo("明日、会議に行く").startswith("明日、")
+    assert convert_to_conservative_teineigo("田中、資料を準備した").startswith("田中さん、")
+
+
+def test_casual_marker_guardrail_allows_titles_but_flags_bare_names():
+    from src.agent.guardrails.honorific_rules import audit_casual_markers
+    assert audit_casual_markers("先生、こんにちは。お伺いしたいのですが、今週の宿題の期限はいつでしょうか。") == (False, [])
+    assert audit_casual_markers("社長、資料をお持ちしました。") == (False, [])
+    assert audit_casual_markers("田中、資料はもう準備しましたか。")[0]
+    assert not audit_casual_markers("田中さん、資料はもう準備しましたか。")[0]

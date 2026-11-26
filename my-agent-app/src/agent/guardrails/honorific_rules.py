@@ -46,10 +46,8 @@ CASUAL_MARKERS = [
     (r"(たいんだよ|たいんだ)(\s|。|$)", "〜たいんだよ – casual desiderative; use 〜たく存じます/〜たいと存じます"),
     (r"(だよ|だぜ|だな|だよな)(\s|。|$)", "〜だよ/ぜ/な – casual copula ending; use です"),
     (r"(するの|したの|行くの|来るの)\?",  "〜するの？ – casual question; use 〜されますか/〜なさいますか"),
-    # Bare surname (kanji 2-4 chars) at start, addressed without さん/様
-    (r"^[一-龠]{2,4}(、|,|\s+)(?!さん|様|先生)",
-     "Bare surname without honorific suffix (呼び捨て); must add さん or 様"),
 ]
+BARE_NAME_DESC = "Bare surname without honorific suffix (呼び捨て); must add さん or 様"
 
 
 def audit_nijuu_keigo(text: str) -> Tuple[bool, List[str]]:
@@ -75,6 +73,8 @@ def audit_casual_markers(text: str) -> Tuple[bool, List[str]]:
     for pattern, desc in CASUAL_MARKERS:
         if re.search(pattern, text):
             found.append(desc)
+    if bare_name_at_start(text):
+        found.append(BARE_NAME_DESC)
     return len(found) > 0, found
 
 
@@ -91,6 +91,24 @@ def audit_nijuu_keigo(text: str) -> Tuple[bool, List[str]]:
         if re.search(pattern, text):
             violations.append(desc)
     return len(violations) > 0, violations
+
+
+# Sentence endings that are already polite, including questions (でしょうか, ますか, ませんか).
+_POLITE_ENDING = r"(です|ます|でした|ました|ません|でしょう|ましょう|ございます|ございません|ください|くださいませ)か?"
+# Titles/roles that are honorific on their own, so they must not get an extra さん.
+_TITLE_SUFFIXES = ("先生", "長", "様", "先輩", "教授", "博士", "主任", "専務", "常務", "役", "殿")
+# Common sentence-initial words that are not names.
+_NOT_NAMES = {"今日", "明日", "昨日", "今週", "来週", "先週", "今月", "来月", "今年", "本当", "実際", "一応",
+              "結局", "最近", "今度", "以前", "確認", "了解", "大丈夫", "皆様"}
+
+
+def bare_name_at_start(text: str) -> str:
+    """Return the name if *text* opens by addressing someone by bare kanji name (田中、…), else "".
+    Titles such as 先生 or 社長 and common words such as 明日 are not bare names."""
+    m = re.match(r"^([一-龠]{2,4})(、|,|\s+)", text)
+    if not m or m.group(1) in _NOT_NAMES or m.group(1).endswith(_TITLE_SUFFIXES):
+        return ""
+    return m.group(1)
 
 
 def convert_to_conservative_teineigo(text: str) -> str:
@@ -110,14 +128,18 @@ def convert_to_conservative_teineigo(text: str) -> str:
 
     # 2. Add 'さん' to bare Japanese surname/name at beginning if followed by punctuation/space
     # e.g. 佐藤、 -> 佐藤さん、 | 田中、 -> 田中さん、
-    text = re.sub(r"^([一-龠]{2,4})(、|,|\s+)", r"\1さん\2", text)
+    # Titles (先生、社長、…) are already honorific and time/adverb words are not names:
+    # 先生さん / 明日さん would be wrong.
+    name = bare_name_at_start(text)
+    if name:
+        text = name + "さん" + text[len(name):]
 
     # 3. Handle casual negotiation 'じゃダメ？' -> 'ではいけませんか？'
     text = re.sub(r"じゃダメ(\?|？)", r"ではいけませんか\1", text)
     text = re.sub(r"じゃダメ", r"ではいけません", text)
 
     # 4. If already ending in polite form, ensure single trailing punctuation
-    if re.search(r"(です|ます|でした|ました|ません|ございます|ください)[。！!？?]*$", text):
+    if re.search(_POLITE_ENDING + r"[。！!？?]*$", text):
         if not re.search(r"[。！!？?]$", text):
             text += "。"
         return text
@@ -134,7 +156,7 @@ def convert_to_conservative_teineigo(text: str) -> str:
     # Clean trailing casual particles (な, ぜ, ぞ, さ, ね, よ, よね)
     text = re.sub(r"(よね|よ|ね|な|ぜ|ぞ|さ)$", "", text).strip()
 
-    if re.search(r"(です|ます|でした|ました|ません|ございます|ください)$", text):
+    if re.search(_POLITE_ENDING + "$", text):
         return text + orig_punct
 
     # 7. Volitional ending (ろう/よう -> ましょう)
