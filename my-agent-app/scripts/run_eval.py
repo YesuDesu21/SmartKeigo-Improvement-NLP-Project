@@ -87,10 +87,12 @@ def run_one(r, cond, t):
 
 
 def rate_limited(rec):
-    """'day' / 'minute' if any LLM call in this run hit a Groq rate limit, else None.
-    Such rows say nothing about the system, so they are retried instead of scored.
+    """'day' / 'minute' if any LLM call in this run hit a Groq rate limit, 'auth' if the API key was
+    rejected, else None. Such rows say nothing about the system, so they are retried instead of scored.
     Other errors (e.g. the model returning malformed output) are real failures and are kept."""
     errs = " ".join(rec["errors"])
+    if "invalid_api_key" in errs or "AuthenticationError" in errs:
+        return "auth"
     if "RateLimit" not in errs and "429" not in errs:
         return None
     return "day" if "per day" in errs else "minute"
@@ -121,6 +123,11 @@ for cond in a.conditions:
                     break
                 print(f"  per-minute rate limit, waiting {a.wait}s...", flush=True)
                 time.sleep(a.wait)
+            if limit == "auth":
+                print(f"Groq rejected the API key (Invalid API Key) after {i - 1} new rows. Fix GROQ_API_KEY "
+                      f"in .env, then run the same command again with --resume.", flush=True)
+                stop = True
+                break
             if limit == "day":
                 print(f"Daily token limit reached after {i - 1} new rows. Run the same command again "
                       f"with --resume once the limit resets.", flush=True)

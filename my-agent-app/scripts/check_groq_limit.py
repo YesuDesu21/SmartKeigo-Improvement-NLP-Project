@@ -6,7 +6,7 @@ import os
 import re
 
 from dotenv import find_dotenv, load_dotenv
-from groq import Groq, RateLimitError
+from groq import AuthenticationError, Groq, RateLimitError
 
 from src.agent.config import RunConfig
 
@@ -16,6 +16,8 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 try:
     client.chat.completions.create(model=model, max_tokens=2000, messages=[{"role": "user", "content": "hi"}])
     print(f"READY: {model} is accepting requests. Run the eval with --resume.")
+except AuthenticationError:
+    print("BAD KEY: Groq rejected GROQ_API_KEY in .env (Invalid API Key). Copy a valid key from console.groq.com/keys.")
 except RateLimitError as e:
     msg = str(e)
     wait = re.search(r"try again in ([0-9hms.]+)", msg)
