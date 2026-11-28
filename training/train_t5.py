@@ -1,6 +1,8 @@
 """Supervised fine-tuning of sonoisa/t5-base-japanese on casual -> keigo pairs (B2 baseline).
     pip install torch transformers sentencepiece accelerate
     python train_t5.py --splits ../corpus-dataset/splits --out checkpoints/t5-keigo
+    With human-reviewed generated pairs added to the training set (val/test are unchanged):
+    python train_t5.py --extra generated/generated_train.jsonl --out checkpoints/t5-keigo-aug
 Input format: "敬語[<register>]: <casual sentence>"  (register tag = controlled track)."""
 import argparse, json, random
 import torch
@@ -46,12 +48,18 @@ if __name__ == "__main__":
     ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--bs", type=int, default=8)
+    ap.add_argument("--extra", nargs="*", default=[], help="extra training jsonl files (e.g. reviewed generated pairs)")
     ap.add_argument("--no-change-frac", type=float, default=0.3, help="share of no_change controls kept in training")
     a = ap.parse_args()
     torch.manual_seed(42)
     tok = T5Tokenizer.from_pretrained(BASE, is_fast=False)
     model = T5ForConditionalGeneration.from_pretrained(BASE)
-    tr, va = DS(load(f"{a.splits}/train.jsonl", a.no_change_frac), tok), DS(load(f"{a.splits}/val.jsonl", 1.0), tok)
+    train_rows = load(f"{a.splits}/train.jsonl", a.no_change_frac)
+    n_corpus = len(train_rows)
+    for p in a.extra:
+        train_rows += load(p, 1.0)
+    print(f"training rows: {n_corpus} from the corpus + {len(train_rows) - n_corpus} extra")
+    tr, va = DS(train_rows, tok), DS(load(f"{a.splits}/val.jsonl", 1.0), tok)
     args = Seq2SeqTrainingArguments(
         output_dir=a.out, num_train_epochs=a.epochs, learning_rate=a.lr, per_device_train_batch_size=a.bs,
         per_device_eval_batch_size=a.bs, eval_strategy="epoch", save_strategy="epoch", save_total_limit=2,

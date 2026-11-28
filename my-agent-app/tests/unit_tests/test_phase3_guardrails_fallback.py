@@ -192,3 +192,9 @@ def test_format_failure_retries_with_json_schema():
 def test_conservative_teineigo_leaves_comma_fragment():
     s = "原因は友達が不定時に猫に餌をやるからで、プリンはお腹がすきすぎて、"
     assert convert_to_conservative_teineigo(s) == s
+
+
+def test_time_words_are_not_bare_names():
+    from src.agent.guardrails.honorific_rules import audit_casual_markers
+    assert audit_casual_markers("本日、クライアントと打ち合わせに参ります。") == (False, [])
+    assert audit_casual_markers("先日、資料を拝見しました。") == (False, [])
