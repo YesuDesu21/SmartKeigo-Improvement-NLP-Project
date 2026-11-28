@@ -198,3 +198,29 @@ def test_time_words_are_not_bare_names():
     from src.agent.guardrails.honorific_rules import audit_casual_markers
     assert audit_casual_markers("本日、クライアントと打ち合わせに参ります。") == (False, [])
     assert audit_casual_markers("先日、資料を拝見しました。") == (False, [])
+
+
+def test_fix_title_honorifics():
+    from src.agent.guardrails.honorific_rules import fix_title_honorifics
+    assert fix_title_honorifics("部長様、資料をご覧になりましたか?") == "部長、資料をご覧になりましたか?"
+    assert fix_title_honorifics("先輩様、先生様") == "先輩、先生"
+    assert fix_title_honorifics("お客様、皆様、田中様") == "お客様、皆様、田中様"
+
+
+def test_audit_honorific_target():
+    from src.agent.guardrails.honorific_rules import audit_honorific_target
+    for bad in ("今日のプレゼンはもう終わられましたでしょうか?", "あの件、もう決まっていらっしゃいますでしょうか。",
+                "今日の授業、キャンセルになられましたか?", "ご連絡がいらっしゃいますか?"):
+        assert audit_honorific_target(bad)[0], bad
+    for ok in ("部長はもうお帰りになりましたか?", "先生、これをご覧になりましたか?", "プレゼンはもう終わりましたか?",
+               "課長はどちらへいらっしゃいますか?"):
+        assert not audit_honorific_target(ok)[0], ok
+
+
+def test_reviewer_rejects_honorific_on_thing_without_llm():
+    fake_llm = CountingFakeLLM(draft_text="部長様、プレゼンはもう終わられましたか?", approve_on_review=1)
+    g = build_graph(lambda m, t: fake_llm, lambda: DummyRetriever())
+    out = g.invoke({"casual_input": "部長、プレゼンもう終わった?", "drafts": [], "usage": []},
+                   config={"configurable": {"max_revisions": 0}})
+    assert fake_llm.reviewer_calls == 0 and out["is_approved"] is False
+    assert out["drafts"][0].startswith("部長、")  # 様 removed deterministically

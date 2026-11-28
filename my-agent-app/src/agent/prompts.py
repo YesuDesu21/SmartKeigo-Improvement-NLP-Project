@@ -14,6 +14,15 @@ Hard rules:
 - Refine casual negotiation and requests into polite business questions (e.g. 〜じゃダメ？ -> 〜ではいけませんか？ / 〜ではご都合が悪いでしょうか？).
 - Refine personal feelings/desires into humble or polite business forms (e.g. 〜たいんだよね -> 〜たく存じます / 〜たいのですが / 〜たいと考えております).
 - sonkeigo ONLY for actions of the addressee / out-group; kenjogo ONLY for the speaker / own in-group; teineigo toward the listener.
+- Titles (部長, 課長, 社長, 先生, 先輩, 教授 …) are honorific by themselves: never add 様 or さん to them (部長様 is wrong).
+  A bare surname (田中、) becomes 田中さん; use 様 only for clients/customers (田中様) when the scenario says so.
+- Use sonkeigo only on verbs whose subject is the honored PERSON. Events and things are not honored: 会議/プレゼンが終わる,
+  件が決まる, 結果が出る, 連絡が来る, 授業がキャンセルになる take plain polite forms (終わりましたか, 決まりましたか,
+  ご連絡はありましたか) or are rephrased so the person is the subject.
+- Prefer the simple ending on an honorific verb: お読みになりましたか, not お読みになりましたでしょうか.
+- Replace colloquial vocabulary: 飯/昼飯 -> 食事/昼食, やつ -> もの/方, ちょっと -> 少し, すごく -> とても.
+- 〜っけ / 〜だっけ asks the listener to confirm something the speaker forgot ("…, right? / was it …?"). Keep who does
+  the action exactly as in the original and convert it to a polite question.
 - Never use double honorifics (nijuu keigo). Never apply sonkeigo to the speaker's own actions.
 - The subject is usually omitted. When a register is requested, assume: sonkeigo -> the subject is the OTHER person (superior/client),
   so raise their action; kenjogo -> the subject is the SPEAKER, so lower your own action; teineigo -> just make the sentence polite.
@@ -45,9 +54,11 @@ Approve only if ALL hold:
   (a statement turned into a request or command is a meaning_change).
 - sonkeigo candidates use respectful forms for the other person; humble forms (〜いたす, 〜ておる, させていただく) are wrong direction.
 - Addressees referred to by bare surnames without honorific suffixes (呼び捨て, e.g. 佐藤) are unacceptable; they must be addressed with さん or 様.
+- No 様/さん after a title (部長様, 先輩様), and no sonkeigo on things or events (プレゼンが終わられました).
 - No double honorific, and it reads as natural business Japanese.
 Reject ONLY for a concrete error from the list above: wrong register, wrong honorific direction, casual wording left in,
-a non-canonical suppletive verb, a double honorific, a bare surname, or a meaning change.
+a non-canonical suppletive verb, a double honorific, a bare surname, 様 on a title, sonkeigo on a thing,
+or a meaning change.
 Do NOT reject for style: if the candidate is correct, approve it even when you would have phrased it differently,
 when another valid keigo form exists (e.g. 拝見しました vs 拝見いたしました, ご存知 vs ご存じ), or when it could be "even more polite".
 If there is no concrete error set approved=true and issues=[]. Otherwise list each error with a category and a fix."""

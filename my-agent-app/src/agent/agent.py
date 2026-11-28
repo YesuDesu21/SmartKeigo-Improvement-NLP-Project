@@ -9,8 +9,8 @@ from langchain_core.runnables import RunnableConfig
 
 from . import prompts
 from .config import RunConfig
-from .guardrails.honorific_rules import (audit_nijuu_keigo, audit_casual_markers, convert_to_conservative_teineigo,
-                                         is_already_polite)
+from .guardrails.honorific_rules import (audit_honorific_target, audit_nijuu_keigo, audit_casual_markers,
+                                         convert_to_conservative_teineigo, fix_title_honorifics, is_already_polite)
 from .knowledge import get_domain_template, get_suppletive_rules
 from .schemas import AnalysisResult, DraftResult, ReviewResult
 from .state import AgentState, KeigoState
@@ -208,6 +208,7 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
 
         text = parsed.keigo_text.strip()
         text = unicodedata.normalize("NFKC", text)
+        text = fix_title_honorifics(text)  # deterministic: 部長様 -> 部長 (titles are already honorific)
 
         # --- Safeguard: reject output that is identical to the casual input.
         #     This catches cases where the LLM parsed successfully but returned
@@ -295,8 +296,11 @@ def make_nodes(llm_factory: Callable = default_llm_factory, retriever_factory: C
                 "final_output": candidate,
             }
 
-        # Stage 1b: Deterministic regex guardrail for Nijuu Keigo (二重敬語) - Zero token fast fail
+        # Stage 1b: Deterministic regex guardrail for Nijuu Keigo (二重敬語) and sonkeigo on things - zero-token fast fail
         has_violations, violations = audit_nijuu_keigo(candidate)
+        wrong_target, target_desc = audit_honorific_target(candidate)
+        if wrong_target and not has_violations:
+            has_violations, violations = True, target_desc
         if has_violations:
             rejection_desc = f"Detected Nijuu Keigo (二重敬語): {'; '.join(violations)}"
             issues = [

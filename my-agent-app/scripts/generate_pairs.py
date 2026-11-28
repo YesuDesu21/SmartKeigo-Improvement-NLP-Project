@@ -212,7 +212,8 @@ _KENJOGO_HINTS = ("いたし", "いたす", "申し", "伺", "参り", "拝見",
 
 def auto_flags(register: str, casual: str, keigo: str) -> str:
     """Rule-based warnings for reviewers. Empty does not mean correct; it means no rule fired."""
-    from src.agent.guardrails.honorific_rules import audit_casual_markers, audit_nijuu_keigo, is_already_polite
+    from src.agent.guardrails.honorific_rules import (audit_casual_markers, audit_honorific_target, audit_nijuu_keigo,
+                                                     is_already_polite)
     flags = []
     if audit_nijuu_keigo(keigo)[0] or "られましたでしょうか" in keigo or "られますでしょうか" in keigo:
         flags.append("double/over-polite honorific?")
@@ -222,7 +223,7 @@ def auto_flags(register: str, casual: str, keigo: str) -> str:
         flags.append("ending not polite?")
     if re.search(r"(上司|部下|同僚|社員|お客|部長|課長|社長|係長|店長|先輩|先生|教授)様", keigo):
         flags.append("様 on a title/role word?")
-    if re.search(r"(が|は)(決まって|出て|届いて|終わって|始まって)(いらっしゃ|おられ)", keigo):
+    if audit_honorific_target(keigo)[0]:
         flags.append("honorific on a thing, not a person?")
     if register == "teineigo" and any(h in keigo for h in _SONKEIGO_HINTS + _KENJOGO_HINTS):
         flags.append("teineigo row uses sonkeigo/kenjogo?")
@@ -253,8 +254,7 @@ target REGISTER, a CASUAL sentence and the agent's KEIGO. Registers:
   なさる, お〜になる, 〜れる/られる.
 - kenjogo: lowers the SPEAKER's own action: 伺う, 参る, 拝見する, いたす, 申し上げる, おる, お/ご〜する, 〜させていただく.
 Call it an error (verdict fix) if any of these is wrong:
-1. Double honorific (二重敬語), e.g. お出になられる, おっしゃられる, ご覧になられる, お伺いいたす, or stacked forms like
-   終わられましたでしょうか.
+1. Double honorific (二重敬語), e.g. お出になられる, おっしゃられる, ご覧になられる, お伺いいたす.
 2. Honorific direction: respectful verbs for the speaker's own action, or humble verbs for the other person's action.
 3. Register mismatch with REGISTER (see above).
 4. Wrong verb conjugation (e.g. 伺ります instead of 伺います) or broken forms (e.g. お電話をかけいたします).
@@ -266,8 +266,9 @@ Call it an error (verdict fix) if any of these is wrong:
    lost hearsay (〜って / 〜んだって = "I heard"), changed tense or negation. Note: 〜っけ / 〜だっけ is NOT hearsay; it
    means "what was it again? / did ... ?", and a plain polite question is a correct conversion of it.
 7. Casual wording left in.
-These are correct, NOT double honorifics: お〜になる, お〜になっている, お〜になりました, お聞きになる, お読みになる,
-〜ていらっしゃる, ご覧になりましたか. Only count it as 二重敬語 when two honorific mechanisms apply to the same verb
+These are correct, NOT double honorifics: お〜になる, ご〜になる (ご確認になる, ご覧になる), お〜になっている,
+お〜になりました, お聞きになる, お読みになる, お考えになる, 〜ていらっしゃる, ご覧になりましたか. A polite ending such as
+〜でしょうか is fine in any register and is not an error by itself. Only count it as 二重敬語 when two honorific mechanisms apply to the same verb
 (お〜になられる, おっしゃられる). Any suggested_keigo must itself follow every rule above.
 Use verdict ok when the keigo is correct and natural, even if another valid phrasing exists (拝見しました and
 拝見いたしました are both fine). Use bad when the CASUAL sentence itself is unnatural or ungrammatical Japanese

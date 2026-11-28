@@ -49,6 +49,28 @@ CASUAL_MARKERS = [
 ]
 BARE_NAME_DESC = "Bare surname without honorific suffix (呼び捨て); must add さん or 様"
 
+# Titles are already honorific: 部長様 / 先輩様 / 先生様 are wrong (お客様 and 皆様 are fine and not listed here).
+_TITLES = r"(部長|課長|社長|係長|店長|次長|専務|常務|会長|先輩|先生|教授|上司)"
+_TITLE_SAMA = _TITLES + r"(様|さん)"
+# Sonkeigo applied to an event/thing rather than a person (プレゼンが終わられた, 件が決まっていらっしゃる, 連絡がいらっしゃる).
+_THING_HONORIFIC = (r"(が|は|、)(もう|まだ|無事に|すでに)?(終わられ|始まられ|決まられ|変わられ|"
+                    r"(決まって|出て|届いて|終わって|始まって|変わって)(いらっしゃ|おられ)|"
+                    r"(キャンセル|中止|延期)になられ)|(連絡|メール|返事|資料|結果)(が|は)いらっしゃ")
+
+
+def fix_title_honorifics(text: str) -> str:
+    """Drop the redundant 様/さん after a title: 部長様 -> 部長, 先輩さん -> 先輩."""
+    return re.sub(_TITLE_SAMA, lambda m: m.group(1), text)
+
+
+def audit_honorific_target(text: str) -> Tuple[bool, List[str]]:
+    """Sonkeigo used on a thing or event instead of a person."""
+    if re.search(_THING_HONORIFIC, text):
+        return True, ["Sonkeigo on a thing/event, not a person (e.g. 終わられました for a presentation, "
+                      "決まっていらっしゃる for a decision): use plain polite 終わりましたか / 決まりましたか, "
+                      "or make the person the subject"]
+    return False, []
+
 
 def audit_nijuu_keigo(text: str) -> Tuple[bool, List[str]]:
     """Audits text for deterministic Nijuu Keigo (二重敬語) violations.
