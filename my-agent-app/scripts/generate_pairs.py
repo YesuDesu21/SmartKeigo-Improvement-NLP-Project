@@ -11,10 +11,14 @@ Run from my-agent-app/. Three steps, each safe to re-run:
        python -m scripts.generate_pairs convert
      --condition A2 (default) skips the LLM reviewer, about half the tokens of A3; your team is the reviewer.
 
-  3. Export the converted pairs that have not been exported yet to a new CSV for the team:
+  3. Pre-screen them with a second model (qwen, about 600 tokens per pair) so the reviewer can skip the safe ones:
+       python -m scripts.generate_pairs judge
+
+  4. Export the converted pairs that have not been exported yet to a new CSV for the team:
        python -m scripts.generate_pairs export
      -> ../training/generated/review_001.csv, review_002.csv, ...  (open in Excel / Google Sheets)
-     Reviewers fill in: keep (y/n), corrected_keigo (only if the agent was wrong), corrected_register, notes.
+     Rows are sorted into buckets (2-check, 1-likely-fine, 3-drop); see training/generated/REVIEW_GUIDE.md.
+     Reviewers fill in: keep (y/n/j), corrected_keigo (only if the agent was wrong), corrected_register, notes.
      Then run scripts/merge_reviewed.py to turn the reviewed rows into training data.
 
 Nothing here reads val.jsonl / test.jsonl content into a prompt, and sentences that already appear in any corpus
@@ -33,10 +37,14 @@ load_dotenv(APP / ".env")
 OUT = ROOT / "training" / "generated"
 SENTENCES = OUT / "sentences.jsonl"
 CONVERTED = OUT / "converted.jsonl"
+JUDGED = OUT / "judged.jsonl"
+JUDGE_MODEL = "qwen/qwen3.8-27b"  # a different model family from the agent (gpt-oss), so it is less likely to share its mistakes
 SPLITS = ROOT / "corpus-dataset" / "splits"
 REGISTERS = ("teineigo", "sonkeigo", "kenjogo")
-CSV_COLUMNS = ["sid", "register", "casual", "agent_keigo", "agent_status", "auto_flags", "keep", "corrected_keigo",
+CSV_COLUMNS = ["sid", "bucket", "spot_check", "register", "casual", "agent_keigo", "auto_flags", "judge_verdict",
+               "judge_issues", "judge_keigo", "english_casual", "english_keigo", "keep", "corrected_keigo",
                "corrected_register", "notes"]
+BUCKET_ORDER = {"2-check": 0, "1-likely-fine": 1, "3-drop": 2}
 
 # What each register needs from the casual sentence, so the agent has a real conversion to make.
 REGISTER_BRIEF = {
@@ -212,8 +220,10 @@ def auto_flags(register: str, casual: str, keigo: str) -> str:
         flags.append("casual wording left?")
     if not is_already_polite(keigo):
         flags.append("ending not polite?")
-    if re.search(r"(上司|部下|同僚|社員|お客)様", keigo):
-        flags.append("odd 様 on a role word?")
+    if re.search(r"(上司|部下|同僚|社員|お客|部長|課長|社長|係長|店長|先輩|先生|教授)様", keigo):
+        flags.append("様 on a title/role word?")
+    if re.search(r"(が|は)(決まって|出て|届いて|終わって|始まって)(いらっしゃ|おられ)", keigo):
+        flags.append("honorific on a thing, not a person?")
     if register == "teineigo" and any(h in keigo for h in _SONKEIGO_HINTS + _KENJOGO_HINTS):
         flags.append("teineigo row uses sonkeigo/kenjogo?")
     if register == "sonkeigo" and not any(h in keigo for h in _SONKEIGO_HINTS) and not re.search(r"お[一-龠]+に", keigo):
@@ -225,6 +235,118 @@ def auto_flags(register: str, casual: str, keigo: str) -> str:
     return "; ".join(flags)
 
 
+class Judgment(BaseModel):
+    verdict: str = Field(description="ok = correct and natural; fix = has a concrete error you can correct; "
+                                     "bad = the casual sentence is unnatural/ungrammatical or the pair cannot be saved")
+    issues: str = Field(description="Short description of each concrete error, in English. Empty if ok.")
+    suggested_keigo: str = Field(description="Corrected keigo in the SAME register with the SAME meaning, only if "
+                                             "verdict is fix. Empty otherwise.")
+    english_casual: str = Field(description="Short literal English translation of the casual sentence")
+    english_keigo: str = Field(description="Short literal English translation of the agent's keigo")
+
+
+JUDGE_SYSTEM = """You are a strict native-level checker of Japanese keigo training data. For each pair you get the
+target REGISTER, a CASUAL sentence and the agent's KEIGO. Registers:
+- teineigo: polite です/ます only. Respectful verbs (いらっしゃる, おっしゃる, 召し上がる, ご覧になる, お〜になる) or humble verbs
+  (伺う, 参る, 拝見する, いたす, 申し上げる, お〜する) do NOT belong in a teineigo answer.
+- sonkeigo: raises the OTHER person's (listener, superior, client) action: いらっしゃる, おっしゃる, ご覧になる, 召し上がる,
+  なさる, お〜になる, 〜れる/られる.
+- kenjogo: lowers the SPEAKER's own action: 伺う, 参る, 拝見する, いたす, 申し上げる, おる, お/ご〜する, 〜させていただく.
+Call it an error (verdict fix) if any of these is wrong:
+1. Double honorific (二重敬語), e.g. お出になられる, おっしゃられる, ご覧になられる, お伺いいたす, or stacked forms like
+   終わられましたでしょうか.
+2. Honorific direction: respectful verbs for the speaker's own action, or humble verbs for the other person's action.
+3. Register mismatch with REGISTER (see above).
+4. Wrong verb conjugation (e.g. 伺ります instead of 伺います) or broken forms (e.g. お電話をかけいたします).
+5. 様 attached to a title or role word (部長様, 課長様, 先輩様, 先生様, 上司様): titles are already honorific, so drop 様.
+   Also a bare surname with no さん/様.
+8. Sonkeigo used on a thing instead of a person (出張が決まっていらっしゃる, 結果が出ていらっしゃる).
+9. Plain/colloquial words left in a polite sentence (昼飯 -> 昼食/お昼, めし, やつ).
+6. Meaning change: added or dropped information, a statement turned into a request, a question turned into a statement,
+   lost hearsay (〜って / 〜んだって = "I heard"), changed tense or negation. Note: 〜っけ / 〜だっけ is NOT hearsay; it
+   means "what was it again? / did ... ?", and a plain polite question is a correct conversion of it.
+7. Casual wording left in.
+These are correct, NOT double honorifics: お〜になる, お〜になっている, お〜になりました, お聞きになる, お読みになる,
+〜ていらっしゃる, ご覧になりましたか. Only count it as 二重敬語 when two honorific mechanisms apply to the same verb
+(お〜になられる, おっしゃられる). Any suggested_keigo must itself follow every rule above.
+Use verdict ok when the keigo is correct and natural, even if another valid phrasing exists (拝見しました and
+拝見いたしました are both fine). Use bad when the CASUAL sentence itself is unnatural or ungrammatical Japanese
+(e.g. 大丈夫っけ), or when the pair makes no sense. Be concrete; do not invent problems."""
+
+
+def cmd_judge(a):
+    from src.agent.agent import call_structured, default_llm_factory
+    llm = default_llm_factory(a.model, 0.0)
+    done = {r["sid"] for r in read_jsonl(JUDGED)}
+    todo = [r for r in read_jsonl(CONVERTED) if r["sid"] not in done and r["agent_status"] != "llm_failed"][: a.limit]
+    print(f"{len(done)} judged, {len(todo)} to judge now with {a.model}", flush=True)
+    counts = {}
+    with JUDGED.open("a", encoding="utf-8") as f:
+        for i, r in enumerate(todo, 1):
+            user = f"REGISTER: {r['register']}\nCASUAL: {r['casual']}\nKEIGO: {r['agent_keigo']}"
+            for attempt in range(4):
+                parsed, rec = call_structured(llm, Judgment, JUDGE_SYSTEM, user, "judge")
+                kind = limit_kind([rec.get("error", "")]) if parsed is None else None
+                if kind != "minute" or attempt == 3:
+                    break
+                print("  per-minute rate limit, waiting 60s...", flush=True)
+                time.sleep(60)
+            if kind in ("day", "auth"):
+                msg = "Groq daily token limit reached" if kind == "day" else "Groq rejected the API key (check .env)"
+                print(f"{msg} after {i - 1} rows. Run the same command again later; finished ones are kept.")
+                sys.exit(1)
+            if parsed is None:
+                print(f"  [{i}/{len(todo)}] judge failed ({rec.get('error', '')[:80]}); will retry next run", flush=True)
+                continue
+            verdict = parsed.verdict.strip().lower()
+            verdict = verdict if verdict in ("ok", "fix", "bad") else "fix"
+            if verdict == "fix" and nfkc(parsed.suggested_keigo) in ("", nfkc(r["agent_keigo"])):
+                verdict = "ok" if not parsed.suggested_keigo.strip() and not parsed.issues.strip() else verdict
+            counts[verdict] = counts.get(verdict, 0) + 1
+            f.write(json.dumps({"sid": r["sid"], "verdict": verdict, "issues": parsed.issues.strip(),
+                                "judge_keigo": nfkc(parsed.suggested_keigo) if verdict == "fix" else "",
+                                "english_casual": parsed.english_casual.strip(),
+                                "english_keigo": parsed.english_keigo.strip(), "model": a.model,
+                                "tokens": rec["input_tokens"] + rec["output_tokens"]}, ensure_ascii=False) + "\n")
+            f.flush()
+            print(f"  [{i}/{len(todo)}] {r['register']:9} {verdict}", flush=True)
+            time.sleep(a.sleep)
+    print("verdicts this run:", counts)
+    print("Next: python -m scripts.generate_pairs export --refresh   (re-sorts the review CSVs into buckets)")
+
+
+def review_rows(rows, spot_n=30, seed=7):
+    """Rows for a review CSV: rule flags + judge verdict -> bucket, a random spot-check sample, sorted by priority."""
+    judged = {j["sid"]: j for j in read_jsonl(JUDGED)}
+    out = []
+    for r in rows:
+        j = judged.get(r["sid"], {})
+        flags = auto_flags(r["register"], r["casual"], r["agent_keigo"])
+        v = j.get("verdict", "")
+        bucket = "3-drop" if v == "bad" else "1-likely-fine" if (v == "ok" and not flags) else "2-check"
+        out.append({**r, "bucket": bucket, "spot_check": "", "auto_flags": flags, "judge_verdict": v or "not judged",
+                    "judge_issues": j.get("issues", ""), "judge_keigo": j.get("judge_keigo", ""),
+                    "english_casual": j.get("english_casual", ""), "english_keigo": j.get("english_keigo", ""),
+                    "keep": "", "corrected_keigo": "", "corrected_register": "", "notes": ""})
+    fine = [r for r in out if r["bucket"] == "1-likely-fine"]
+    for r in random.Random(seed).sample(fine, min(spot_n, len(fine))):
+        r["spot_check"] = "CHECK"
+    out.sort(key=lambda r: (BUCKET_ORDER[r["bucket"]], r["spot_check"] != "CHECK", r["register"], r["sid"]))
+    return out
+
+
+def write_review(path, rows):
+    # utf-8-sig so Excel shows the Japanese correctly when the file is double-clicked.
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    c = {b: sum(r["bucket"] == b for r in rows) for b in BUCKET_ORDER}
+    print(f"  {path.name}: {len(rows)} rows | to review: {c['2-check']} check + "
+          f"{sum(r['spot_check'] == 'CHECK' for r in rows)} spot-check | likely fine: {c['1-likely-fine']} | "
+          f"drop: {c['3-drop']}")
+
+
 def refresh_unreviewed():
     """Rewrite review CSVs whose keep/corrected columns are all still empty, with the current columns and flags."""
     conv = {r["sid"]: r for r in read_jsonl(CONVERTED)}
@@ -234,14 +356,7 @@ def refresh_unreviewed():
         if any((row.get(k) or "").strip() for row in old for k in ("keep", "corrected_keigo", "corrected_register", "notes")):
             print(f"  {p.name}: already being reviewed, left unchanged")
             continue
-        with p.open("w", encoding="utf-8-sig", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-            w.writeheader()
-            for row in old:
-                r = conv.get(row["sid"], row)
-                w.writerow({**r, "auto_flags": auto_flags(r["register"], r["casual"], r["agent_keigo"]), "keep": "",
-                            "corrected_keigo": "", "corrected_register": "", "notes": ""})
-        print(f"  {p.name}: refreshed ({len(old)} rows)")
+        write_review(p, review_rows([conv.get(row["sid"], row) for row in old]))
 
 
 def cmd_export(a):
@@ -260,15 +375,8 @@ def cmd_export(a):
         print("nothing new to export.")
         return
     path = OUT / f"review_{len(files) + 1:03d}.csv"
-    # utf-8-sig so Excel shows the Japanese correctly when the file is double-clicked.
-    with path.open("w", encoding="utf-8-sig", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-        w.writeheader()
-        for r in sorted(rows, key=lambda r: (r["register"], r["sid"])):
-            w.writerow({**r, "auto_flags": auto_flags(r["register"], r["casual"], r["agent_keigo"]), "keep": "", "corrected_keigo": "", "corrected_register": "", "notes": ""})
-    print(f"wrote {len(rows)} pairs -> {path}")
-    print("Reviewers: keep = y or n; corrected_keigo only if the agent's keigo is wrong; corrected_register only if "
-          "the register is wrong. Rows with agent_status 'fallback' need the most careful check.")
+    write_review(path, review_rows(rows))
+    print("See training/generated/REVIEW_GUIDE.md for how to fill it in.")
 
 
 if __name__ == "__main__":
@@ -283,8 +391,12 @@ if __name__ == "__main__":
     p.add_argument("--condition", default="A2", choices=["A2", "A3"], help="A2 = no reviewer (cheaper)")
     p.add_argument("--limit", type=int, help="convert at most this many now")
     p.add_argument("--sleep", type=float, default=2.0)
+    p = sub.add_parser("judge", help="pre-screen the converted pairs with a second model")
+    p.add_argument("--model", default=JUDGE_MODEL)
+    p.add_argument("--limit", type=int, help="judge at most this many now")
+    p.add_argument("--sleep", type=float, default=1.0)
     p = sub.add_parser("export", help="write a new review CSV for the team")
     p.add_argument("--refresh", action="store_true",
                    help="rebuild the existing review CSVs that nobody has filled in yet (e.g. to add new columns)")
     a = ap.parse_args()
-    {"sentences": cmd_sentences, "convert": cmd_convert, "export": cmd_export}[a.cmd](a)
+    {"sentences": cmd_sentences, "convert": cmd_convert, "judge": cmd_judge, "export": cmd_export}[a.cmd](a)
